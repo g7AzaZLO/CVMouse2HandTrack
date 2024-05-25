@@ -1,6 +1,6 @@
 import cv2
 import pyautogui as pag
-import TwoHandTrack as tht
+from functional import TwoHandTrack as tht
 
 # detector initialization
 detector = tht.HandDetector(detectionCon=0.7, maxHands=2)
