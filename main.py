@@ -9,9 +9,9 @@ from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 import keyboard
 from settings.config import detector, cam, wCam, hCam, frameR, wScr, hScr
-from settings.initial_var import smooth, plocX, plocY, clockX, clockY, pTime, flag, prevLenght
+from settings.initial_var import smooth, plocX, plocY, clockX, clockY, pTime, flag, prevLength
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Any
-
 
 def get_volume_range() -> Tuple[float, float]:
     """Gets the volume range from the system."""
@@ -21,7 +21,6 @@ def get_volume_range() -> Tuple[float, float]:
     volRange = volume.GetVolumeRange()
     print(volRange)
     return volRange[0], volRange[1]
-
 
 def compute_distance(lmList1: List[List[int]]) -> float:
     """Computes the distance between landmarks for depth estimation."""
@@ -46,15 +45,13 @@ def compute_distance(lmList1: List[List[int]]) -> float:
 
     if ratioXY >= constratioXY:
         l = np.abs(shxnew * np.sqrt(1 + (1 / constratioXY) ** 2))
-        distanse170cm = 5503.9283512 * l ** (-1.0016171)
+        distance170cm = 5503.9283512 * l ** (-1.0016171)
     else:
         l = np.abs(shynew * np.sqrt(1 + constratioXY ** 2))
-        distanse170cm = 5503.9283512 * l ** (-1.0016171)
-    return distanse170cm
+        distance170cm = 5503.9283512 * l ** (-1.0016171)
+    return distance170cm
 
-
-def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, clockY: float, smooth: int) -> Tuple[
-    float, float]:
+def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, clockY: float, smooth: int) -> Tuple[float, float]:
     """Moves the mouse cursor smoothly based on hand landmarks."""
     x3 = np.interp(x1, (frameR, wCam - frameR), (0, wScr))
     y3 = np.interp(y1, (frameR, hCam - frameR), (0, hScr))
@@ -62,7 +59,6 @@ def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, cloc
     clockY = clockY + (y3 - plocY) / smooth
     mouse.move(clockX, clockY)
     return clockX, clockY
-
 
 def handle_mouse_click(finup: List[int], lmList1: List[List[int]], img: Any, x1: int, y1: int) -> bool:
     """Handles left and right mouse clicks based on finger positions."""
@@ -83,7 +79,6 @@ def handle_mouse_click(finup: List[int], lmList1: List[List[int]], img: Any, x1:
             flag = False
     return flag
 
-
 def handle_scroll(finup: List[int], lmList1: List[List[int]]):
     """Handles mouse scrolling based on finger positions."""
     if finup[0] == 1 and finup[1] == 0 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0:
@@ -94,15 +89,12 @@ def handle_scroll(finup: List[int], lmList1: List[List[int]]):
         elif y1 < y2:
             mouse.wheel(delta=0.5)
 
-
-def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, int], centerPoint2: Tuple[int, int],
-                prevLenght: float, img: Any) -> float:
+def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, int], centerPoint2: Tuple[int, int], prevLength: float, img: Any) -> float:
     """Handles zooming in and out based on the distance between two hands."""
     global flag
-    if finup[0] == 1 and finup[1] == 1 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0 and fingers2[0] == 1 and \
-            fingers2[1] == 1 and fingers2[2] == 0 and fingers2[3] == 0 and fingers2[4] == 0:
+    if finup[0] == 1 and finup[1] == 1 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0 and fingers2[0] == 1 and fingers2[1] == 1 and fingers2[2] == 0 and fingers2[3] == 0 and fingers2[4] == 0:
         length, info, img = detector.findDistance(centerPoint1, centerPoint2, img)
-        if length > prevLenght:
+        if length > prevLength:
             keyboard.press('ctrl')
             mouse.wheel(0.1)
             keyboard.release('ctrl')
@@ -110,9 +102,8 @@ def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, 
             keyboard.press('ctrl')
             mouse.wheel(-0.1)
             keyboard.release('ctrl')
-        prevLenght = length
-    return prevLenght
-
+        prevLength = length
+    return prevLength
 
 def handle_grab_and_drop(finup: List[int], lmList1: List[List[int]], clockX: float, clockY: float, img: Any):
     """Handles grabbing and moving objects based on finger positions."""
@@ -123,20 +114,31 @@ def handle_grab_and_drop(finup: List[int], lmList1: List[List[int]], clockX: flo
             mouse.press(button="left")
             mouse.move(clockX, clockY)
 
+def detect_hands(img):
+    """Wrapper function to call detector.findHands with keyword arguments."""
+    return detector.findHands(img, flipType=False)
 
-async def process_frame():
+async def process_frame(executor):
     """Asynchronously processes video frames and gesture handling."""
     minVol, maxVol = get_volume_range()
-    global plocX, plocY, clockX, clockY, pTime, flag, prevLenght
+    global plocX, plocY, clockX, clockY, pTime, flag, prevLength
 
     while True:
-        success, img = cam.read()
+        success, img = await asyncio.get_event_loop().run_in_executor(executor, cam.read)
         if not success:
             break
         img = cv2.flip(img, 1)
-        hands, img = detector.findHands(img, flipType=False)
+        result = await asyncio.get_event_loop().run_in_executor(executor, detect_hands, img)
 
-        if hands:
+        if result is None or len(result) == 0:
+            hands = []
+        elif isinstance(result, tuple) and len(result) == 2:
+            hands, img = result
+        else:
+            hands = result if isinstance(result, list) else []
+            img = result[1] if len(result) > 1 else img
+
+        if hands and len(hands) > 0:
             hand1 = hands[0]
             lmList1 = hand1["lmList"]
             fingers1 = detector.fingersUp(hand1)
@@ -161,14 +163,14 @@ async def process_frame():
             handle_scroll(finup, lmList1)
             handle_grab_and_drop(finup, lmList1, clockX, clockY, img)
 
-        if len(hands) == 2:
-            hand2 = hands[1]
-            lmList2 = hand2["lmList"]
-            centerPoint1 = hand1["center"]
-            centerPoint2 = hand2["center"]
-            fingers2 = detector.fingersUp(hand2)
-            global prevLenght
-            prevLenght = handle_zoom(finup, fingers2, centerPoint1, centerPoint2, prevLenght, img)
+            if len(hands) == 2:
+                hand2 = hands[1]
+                lmList2 = hand2["lmList"]
+                centerPoint1 = hand1["center"]
+                centerPoint2 = hand2["center"]
+                fingers2 = detector.fingersUp(hand2)
+
+                prevLength = handle_zoom(finup, fingers2, centerPoint1, centerPoint2, prevLength, img)
 
         cTime = time.time()
         fps = 1 / (cTime - pTime)
@@ -179,10 +181,9 @@ async def process_frame():
         cv2.waitKey(1)
         await asyncio.sleep(0)  # Allows other asynchronous tasks to run
 
-
 async def main():
-    await process_frame()
-
+    executor = ThreadPoolExecutor(max_workers=4)
+    await process_frame(executor)
 
 if __name__ == "__main__":
     asyncio.run(main())

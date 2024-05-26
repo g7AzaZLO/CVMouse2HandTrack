@@ -1,5 +1,5 @@
 # const for mouse smoothing
-smooth = 3.5
+smooth = 2
 plocX = 0
 plocY = 0
 clockX = 0
@@ -13,4 +13,4 @@ flag = False
 flag4time = False
 
 # length
-prevLenght = 0
+prevLength = 0
