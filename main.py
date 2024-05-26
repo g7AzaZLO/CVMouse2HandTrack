@@ -167,7 +167,7 @@ async def process_frame():
             centerPoint1 = hand1["center"]
             centerPoint2 = hand2["center"]
             fingers2 = detector.fingersUp(hand2)
-
+            global prevLenght
             prevLenght = handle_zoom(finup, fingers2, centerPoint1, centerPoint2, prevLenght, img)
 
         cTime = time.time()
