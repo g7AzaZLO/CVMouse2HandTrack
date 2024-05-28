@@ -7,20 +7,22 @@ from functional import CVfunc as func
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
+from collections import deque
 import keyboard
 from settings.config import detector, cam, wCam, hCam, frameR, wScr, hScr
 from settings.initial_var import smooth, plocX, plocY, clockX, clockY, pTime, flag, prevLength
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Any
 
-def get_volume_range() -> Tuple[float, float]:
+
+def get_volume_range() -> Tuple[float, float, Any]:
     """Gets the volume range from the system."""
     devices = AudioUtilities.GetSpeakers()
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     volume = cast(interface, POINTER(IAudioEndpointVolume))
     volRange = volume.GetVolumeRange()
-    print(volRange)
-    return volRange[0], volRange[1]
+    return volRange[0], volRange[1], volume
+
 
 def compute_distance(lmList1: List[List[int]]) -> float:
     """Computes the distance between landmarks for depth estimation."""
@@ -51,7 +53,9 @@ def compute_distance(lmList1: List[List[int]]) -> float:
         distance170cm = 5503.9283512 * l ** (-1.0016171)
     return distance170cm
 
-def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, clockY: float, smooth: int) -> Tuple[float, float]:
+
+def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, clockY: float, smooth: int) -> Tuple[
+    float, float]:
     """Moves the mouse cursor smoothly based on hand landmarks."""
     x3 = np.interp(x1, (frameR, wCam - frameR), (0, wScr))
     y3 = np.interp(y1, (frameR, hCam - frameR), (0, hScr))
@@ -59,6 +63,7 @@ def move_mouse(x1: int, y1: int, plocX: float, plocY: float, clockX: float, cloc
     clockY = clockY + (y3 - plocY) / smooth
     mouse.move(clockX, clockY)
     return clockX, clockY
+
 
 def handle_mouse_click(finup: List[int], lmList1: List[List[int]], img: Any, x1: int, y1: int) -> bool:
     """Handles left and right mouse clicks based on finger positions."""
@@ -79,6 +84,7 @@ def handle_mouse_click(finup: List[int], lmList1: List[List[int]], img: Any, x1:
             flag = False
     return flag
 
+
 def handle_scroll(finup: List[int], lmList1: List[List[int]]):
     """Handles mouse scrolling based on finger positions."""
     if finup[0] == 1 and finup[1] == 0 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0:
@@ -89,10 +95,13 @@ def handle_scroll(finup: List[int], lmList1: List[List[int]]):
         elif y1 < y2:
             mouse.wheel(delta=0.5)
 
-def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, int], centerPoint2: Tuple[int, int], prevLength: float, img: Any) -> float:
+
+def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, int], centerPoint2: Tuple[int, int],
+                prevLength: float, img: Any) -> float:
     """Handles zooming in and out based on the distance between two hands."""
     global flag
-    if finup[0] == 1 and finup[1] == 1 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0 and fingers2[0] == 1 and fingers2[1] == 1 and fingers2[2] == 0 and fingers2[3] == 0 and fingers2[4] == 0:
+    if finup[0] == 1 and finup[1] == 1 and finup[2] == 0 and finup[3] == 0 and finup[4] == 0 and fingers2[0] == 1 and \
+            fingers2[1] == 1 and fingers2[2] == 0 and fingers2[3] == 0 and fingers2[4] == 0:
         length, info, img = detector.findDistance(centerPoint1, centerPoint2, img)
         if length > prevLength:
             keyboard.press('ctrl')
@@ -105,6 +114,7 @@ def handle_zoom(finup: List[int], fingers2: List[int], centerPoint1: Tuple[int, 
         prevLength = length
     return prevLength
 
+
 def handle_grab_and_drop(finup: List[int], lmList1: List[List[int]], clockX: float, clockY: float, img: Any):
     """Handles grabbing and moving objects based on finger positions."""
     if finup[0] == 1 and finup[1] == 1 and finup[2] == 1 and finup[3] == 0 and finup[4] == 0:
@@ -114,20 +124,45 @@ def handle_grab_and_drop(finup: List[int], lmList1: List[List[int]], clockX: flo
             mouse.press(button="left")
             mouse.move(clockX, clockY)
 
+
+def handle_volume_control(finup: List[int], lmList1: List[List[int]], minVol: float, maxVol: float, volume: Any,
+                          img: Any, distance_buffer: deque, buffer_size: int = 5) -> bool:
+    """Handles volume control based on finger positions using moving average."""
+    if finup[0] == 1 and finup[1] == 1 and finup[2] == 0 and finup[3] == 0 and finup[4] == 1:
+        length, info, img = detector.findDistance(lmList1[4][:2], lmList1[8][:2], img)
+        dist = compute_distance(lmList1)
+
+        # Update the distance buffer
+        distance_buffer.append(length)
+        if len(distance_buffer) > buffer_size:
+            distance_buffer.popleft()
+
+        # Compute the moving average
+        smoothed_length = np.mean(distance_buffer)
+
+        func.chngVol(smoothed_length, minVol, maxVol, volume, dist)
+        return True
+    return False
+
+
 def detect_hands(img):
     """Wrapper function to call detector.findHands with keyword arguments."""
     return detector.findHands(img, flipType=False)
 
+
 async def process_frame(executor):
     """Asynchronously processes video frames and gesture handling."""
-    minVol, maxVol = get_volume_range()
+    minVol, maxVol, volume = get_volume_range()
     global plocX, plocY, clockX, clockY, pTime, flag, prevLength
+
+    volume_control_active = False
+    distance_buffer = deque()
 
     while True:
         success, img = await asyncio.get_event_loop().run_in_executor(executor, cam.read)
         if not success:
             break
-        img = cv2.flip(img, 1)
+        img = cv2.flip(img, 1)  # Flip the image
         result = await asyncio.get_event_loop().run_in_executor(executor, detect_hands, img)
 
         if result is None or len(result) == 0:
@@ -162,6 +197,11 @@ async def process_frame(executor):
             flag = handle_mouse_click(finup, lmList1, img, x1, y1)
             handle_scroll(finup, lmList1)
             handle_grab_and_drop(finup, lmList1, clockX, clockY, img)
+
+            volume_control_active = handle_volume_control(finup, lmList1, minVol, maxVol, volume, img, distance_buffer)
+
+            if volume_control_active and finup[4] == 0:
+                volume_control_active = False
 
             if len(hands) == 2:
                 hand2 = hands[1]
